@@ -312,7 +312,10 @@ func TestConnectAnAgent(t *testing.T) {
 	app := func() *App {
 		out.Reset()
 		return &App{In: strings.NewReader(""), Out: &out, Err: &out, Dir: dir, Home: home, NoFile: true, Env: func(string) string { return "" },
-			Exec: func(name string, args ...string) error { ran = append(ran, append([]string{name}, args...)); return nil }}
+			Exec: func(name string, args ...string) error {
+				ran = append(ran, append([]string{name}, args...))
+				return nil
+			}}
 	}
 	if code := app().Run(context.Background(), []string{"connect", "claude"}); code != 0 || len(ran) != 2 {
 		t.Fatalf("connect claude: %d, ran %v, %s", code, ran, out.String())
