@@ -35,12 +35,22 @@ go install github.com/eversonder/annex-cli/cmd/annex@latest
 | `annex files`, `cp`, `logs` | Look around, copy files in or out, read the log |
 | `annex template ls`, `apply`, `show`, `from`, `rm` | Templates: what new sandboxes start as |
 | `annex providers` | The accounts the workspace has connected |
+| `annex connect claude`, `connect cursor` | Give a coding agent Annex's tools, with this computer's key |
 
 `<id>` may be left out when exactly one sandbox is running. `--json` prints the API's own answer. `annex help` lists everything; the full guide is at [annex.eversonder.com/docs/cli](https://annex.eversonder.com/docs/cli).
 
+### Give your coding agent a computer
+
+```sh
+annex connect claude     # Claude Code, in every project
+annex connect cursor     # Cursor; --project writes a file for the project that holds no key
+```
+
+Your agent then has tools to start a sandbox, run commands in it and read and write its files. Ask it: "Start a sandbox, clone this repo there and run the tests." Nothing is pasted anywhere: the command uses the key this computer is signed in with.
+
 ### annex.yml
 
-A template is a small file saying what a sandbox starts with. In a folder that has one, `annex start` saves it and starts from it:
+A template is a small file saying what a sandbox starts with. In a folder that has one, `annex start` saves it and starts from it. Ready-made ones are at [annex-templates](https://github.com/eversonder/annex-templates).
 
 ```yaml
 name: node-dev

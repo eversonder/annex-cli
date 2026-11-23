@@ -300,3 +300,64 @@ setup:
 		}
 	}
 }
+
+// "annex connect" hands a coding agent this computer's key without anyone
+// pasting it: Claude Code through its own command, Cursor through its file,
+// where everything else in the file stays and a project's file holds no key.
+func TestConnectAnAgent(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"url":"http://annex.test","api_key":"anx_live_secret","workspace":"wsp_a"}`), 0o600)
+	var ran [][]string
+	var out bytes.Buffer
+	app := func() *App {
+		out.Reset()
+		return &App{In: strings.NewReader(""), Out: &out, Err: &out, Dir: dir, Home: home, NoFile: true, Env: func(string) string { return "" },
+			Exec: func(name string, args ...string) error { ran = append(ran, append([]string{name}, args...)); return nil }}
+	}
+	if code := app().Run(context.Background(), []string{"connect", "claude"}); code != 0 || len(ran) != 2 {
+		t.Fatalf("connect claude: %d, ran %v, %s", code, ran, out.String())
+	}
+	if got := strings.Join(ran[1], " "); got != "claude mcp add --transport http --scope user annex http://annex.test/mcp --header Authorization: Bearer anx_live_secret" {
+		t.Fatalf("it ran %q", got)
+	}
+	if strings.Contains(out.String(), "anx_live_secret") {
+		t.Fatal("the key was printed")
+	}
+
+	file := filepath.Join(home, ".cursor", "mcp.json")
+	os.MkdirAll(filepath.Dir(file), 0o700)
+	os.WriteFile(file, []byte(`{"mcpServers":{"other":{"url":"https://other.test"}},"theirs":true}`), 0o644)
+	if code := app().Run(context.Background(), []string{"connect", "cursor"}); code != 0 {
+		t.Fatalf("connect cursor: %s", out.String())
+	}
+	var doc struct {
+		Theirs     bool
+		McpServers map[string]struct {
+			URL     string
+			Headers map[string]string
+		}
+	}
+	b, _ := os.ReadFile(file)
+	if json.Unmarshal(b, &doc); !doc.Theirs || doc.McpServers["other"].URL != "https://other.test" || doc.McpServers["annex"].URL != "http://annex.test/mcp" || doc.McpServers["annex"].Headers["Authorization"] != "Bearer anx_live_secret" {
+		t.Fatalf("the file: %s", b)
+	}
+	if st, _ := os.Stat(file); st.Mode().Perm() != 0o600 {
+		t.Fatalf("the file holds a key and is mode %v; want it readable by this user only", st.Mode().Perm())
+	}
+	// A file that isn't JSON is never overwritten.
+	os.WriteFile(file, []byte(`{ not json`), 0o600)
+	if code := app().Run(context.Background(), []string{"connect", "cursor"}); code == 0 || !strings.Contains(out.String(), "left it alone") {
+		t.Fatalf("a broken file: %d %s", code, out.String())
+	}
+	if b, _ := os.ReadFile(file); string(b) != `{ not json` {
+		t.Fatal("a broken file was overwritten")
+	}
+	// A project's file names the variable, never the key.
+	t.Chdir(t.TempDir())
+	if code := app().Run(context.Background(), []string{"connect", "cursor", "--project"}); code != 0 {
+		t.Fatalf("connect cursor --project: %s", out.String())
+	}
+	if b, _ := os.ReadFile(filepath.Join(".cursor", "mcp.json")); strings.Contains(string(b), "anx_live_secret") || !strings.Contains(string(b), "${env:ANNEX_API_KEY}") {
+		t.Fatalf("the project's file: %s", b)
+	}
+}

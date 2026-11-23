@@ -29,7 +29,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.4.1"
+const Version = "0.5.0"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -60,6 +60,9 @@ const usage = `annex: Annex from your terminal
   annex template rm <name>
 
   annex providers             the accounts this workspace has connected
+
+  annex connect claude        give Claude Code Annex's tools, with this computer's key
+  annex connect cursor        the same for Cursor (--project: a file for this project that holds no key)
   annex version
 
 <id> may be left out when exactly one sandbox is running. Add --json to print the API's own answer.
@@ -74,8 +77,10 @@ type App struct {
 	Env      func(string) string
 	Dir      string // the config folder; "" is ~/.config/annex
 	HTTP     *http.Client
-	Open     func(url string) // opens a browser; nil doesn't try
-	NoFile   bool             // don't look for an annex.yml in the current folder (tests)
+	Open     func(url string)                        // opens a browser; nil doesn't try
+	NoFile   bool                                    // don't look for an annex.yml in the current folder (tests)
+	Exec     func(name string, args ...string) error // runs another command (connect); nil is os/exec
+	Home     string                                  // the home folder; "" is the user's (connect)
 
 	cfg  config
 	json bool
@@ -122,7 +127,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	run := map[string]func(context.Context, []string) error{
 		"login": a.login, "logout": a.logout, "whoami": a.whoami,
 		"ls": a.ls, "start": a.start, "info": a.info, "stop": a.act("stop"), "pause": a.act("pause"), "resume": a.act("resume"),
-		"run": a.run, "shell": a.shell, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers,
+		"run": a.run, "shell": a.shell, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers, "connect": a.connect,
 		"template": a.templates, "templates": a.templates,
 		"version": func(context.Context, []string) error { fmt.Fprintln(a.Out, "annex", Version); return nil },
 	}[cmd]
