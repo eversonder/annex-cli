@@ -47,8 +47,10 @@ func (a *App) connect(ctx context.Context, args []string) error {
 				c.Stdout, c.Stderr = a.Err, a.Err
 				return c.Run()
 			}
+			exec.CommandContext(ctx, "claude", "mcp", "remove", "--scope", "user", "annex").Run() // an earlier connection, with an older key; quiet, as there is usually none
+		} else {
+			run("claude", "mcp", "remove", "--scope", "user", "annex")
 		}
-		run("claude", "mcp", "remove", "--scope", "user", "annex") // an earlier connection, with an older key: fine if there is none
 		if err := run("claude", "mcp", "add", "--transport", "http", "--scope", "user", "annex", address, "--header", "Authorization: "+bearer); err != nil {
 			return fmt.Errorf("Claude Code didn't take it: %w", err)
 		}

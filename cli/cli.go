@@ -29,7 +29,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.5.0"
+const Version = "0.5.1"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
