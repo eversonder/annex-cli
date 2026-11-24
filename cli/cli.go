@@ -23,13 +23,14 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
 )
 
 // Version is this build of the command.
-const Version = "0.7.0"
+const Version = "0.7.1"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -705,14 +706,26 @@ func (a *App) providers(ctx context.Context, args []string) error {
 // ---------- commands ----------
 
 type command struct {
-	ID       string `json:"id"`
-	Status   string `json:"status"`
-	ExitCode *int   `json:"exit_code"`
+	ID        string  `json:"id"`
+	Status    string  `json:"status"`
+	ExitCode  *int    `json:"exit_code"`
+	Output    *string `json:"output"` // with ?wait=, when it ended in time: stdout and stderr together
+	Truncated bool    `json:"truncated"`
 }
+
+// quickWait is how long the shell asks Annex to wait for a line before
+// streaming it: a command that ends by then comes back in the one answer,
+// which on providers that run commands in the background (Namespace) is one
+// call to them instead of three (bug.mov, 2026-11-24: each line took about 2 s).
+// Ctrl+C can't stop a line until Annex has answered, so it stays short.
+const quickWait = 5
 
 // exec runs one command in the sandbox and streams its output here until it
 // ends, answering its exit code. Ctrl+C stops the command, as it would locally.
-func (a *App) exec(ctx context.Context, id, line, cwd string, timeout int) (int, error) {
+// exec runs line and passes on its output. wait > 0 asks Annex to hold the
+// answer that many seconds: a command that ends by then is printed from the
+// answer, stdout and stderr together; any other is streamed as usual.
+func (a *App) exec(ctx context.Context, id, line, cwd string, timeout, wait int) (int, error) {
 	base, err := a.ws()
 	if err != nil {
 		return 1, err
@@ -724,9 +737,20 @@ func (a *App) exec(ctx context.Context, id, line, cwd string, timeout int) (int,
 	if timeout > 0 {
 		in["timeout_seconds"] = timeout
 	}
+	q := ""
+	if wait > 0 {
+		q = "?wait=" + strconv.Itoa(wait)
+	}
 	var made struct{ Command command }
-	if err := a.call(ctx, "POST", base+"/sandboxes/"+id+"/commands", in, &made); err != nil {
+	if err := a.call(ctx, "POST", base+"/sandboxes/"+id+"/commands"+q, in, &made); err != nil {
 		return 1, err
+	}
+	if c := made.Command; wait > 0 && c.Status != "running" && c.Output != nil && !c.Truncated {
+		io.WriteString(a.Out, *c.Output)
+		if c.ExitCode != nil {
+			return *c.ExitCode, nil
+		}
+		return 1, fmt.Errorf("the command ended %s", cmpOr(c.Status, "without an exit code"))
 	}
 	at := base + "/sandboxes/" + id + "/commands/" + made.Command.ID
 
@@ -854,7 +878,7 @@ func (a *App) run(ctx context.Context, args []string) error {
 	if len(cmd) == 0 {
 		return errors.New("say what to run: annex run <id> -- npm test")
 	}
-	code, err := a.exec(ctx, id, strings.Join(cmd, " "), *cwd, *timeout)
+	code, err := a.exec(ctx, id, strings.Join(cmd, " "), *cwd, *timeout, 0) // run keeps stdout and stderr apart: always streamed
 	if err != nil {
 		return err
 	}

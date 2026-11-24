@@ -80,7 +80,7 @@ func (a *App) shell(ctx context.Context, args []string) error {
 		prev := a.Out
 		a.Out = tap
 		_, runErr := a.exec(ctx, id, "{ [ -f "+env+" ] && . "+env+"; } 2>/dev/null\n"+line+
-			"\n__annex_rc=$?; export -p > "+env+" 2>/dev/null; printf '\\n"+mark+"%s\\n' \"$PWD\"; exit $__annex_rc", cwd, 0)
+			"\n__annex_rc=$?; export -p > "+env+" 2>/dev/null; printf '\\n"+mark+"%s\\n' \"$PWD\"; exit $__annex_rc", cwd, 0, quickWait)
 		a.Out = prev
 		tap.flush()
 		if tap.cwd != "" {
@@ -101,7 +101,7 @@ func (a *App) quiet(ctx context.Context, id, line, cwd string) (string, error) {
 	var buf bytes.Buffer
 	out, errs := a.Out, a.Err
 	a.Out, a.Err = &buf, io.Discard
-	_, err := a.exec(ctx, id, line, cwd, 30)
+	_, err := a.exec(ctx, id, line, cwd, 30, quickWait)
 	a.Out, a.Err = out, errs
 	return buf.String(), err
 }

@@ -27,6 +27,8 @@ type annexStandIn struct {
 	cmds     map[string]*exec.Cmd
 	out, err map[string]*bytes.Buffer
 	root     string
+	waited   int // commands answered whole, with ?wait=, as Annex does when one ends in time
+	streams  int
 }
 
 const (
@@ -81,10 +83,23 @@ func (s *annexStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.cmds[id], s.out[id], s.err[id] = c, &bytes.Buffer{}, &bytes.Buffer{}
 		c.Stdout, c.Stderr = s.out[id], s.err[id]
 		s.mu.Unlock()
+		if r.URL.Query().Get("wait") != "" && !strings.Contains(in.Command, "sleep") { // ends in time: the answer carries it
+			code := 0
+			if err := c.Run(); err != nil {
+				code = c.ProcessState.ExitCode()
+			}
+			s.mu.Lock()
+			s.waited++
+			out := s.out[id].String() + s.err[id].String()
+			s.mu.Unlock()
+			say(201, map[string]any{"command": map[string]any{"id": id, "status": "exited", "exit_code": code, "output": out}})
+			return
+		}
 		say(201, map[string]any{"command": map[string]any{"id": id, "status": "running"}})
 	case strings.HasSuffix(p, "/stream"):
 		id := strings.Split(strings.TrimPrefix(p, base+"/"+testSbx+"/commands/"), "/")[0]
 		s.mu.Lock()
+		s.streams++
 		c, out, errs := s.cmds[id], s.out[id], s.err[id]
 		s.mu.Unlock()
 		code := 0
@@ -173,6 +188,13 @@ func TestTheCommand(t *testing.T) {
 	if code != 0 || strings.Contains(out, "__annex") || !strings.Contains(out, root+"\n") || !strings.Contains(out, root+"/sub\n") ||
 		!strings.Contains(out, ":"+root+"/sub$ ") || !strings.Contains(out, "no-newline\n") || !strings.Contains(out, "still here\n") {
 		t.Fatalf("shell: %d\n%s\n%s", code, out, errs)
+	}
+
+	// A shell line that ends within quickWait comes back in the one answer, never streamed; a slow one streams.
+	s.waited, s.streams = 0, 0
+	code, out, _ = annex(t, srv, dir, "echo quick\nsleep 0.1; echo slow\nexit\n", "shell", testSbx)
+	if code != 0 || !strings.Contains(out, "quick\n") || !strings.Contains(out, "slow\n") || strings.Contains(out, "__annex") || s.waited < 2 || s.streams != 1 {
+		t.Fatalf("shell, quick lines: %d %q (answered whole %d, streamed %d)", code, out, s.waited, s.streams)
 	}
 
 	// An exported variable carries over to the next line too, and cd - goes back, as in a real shell.
