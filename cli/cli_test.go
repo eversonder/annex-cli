@@ -62,6 +62,10 @@ func (s *annexStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case p == "/v1/key":
 		say(200, map[string]any{"key": map[string]any{"id": "key_1", "workspace": map[string]any{"id": testWS, "name": "Acme"}}})
+	case p == "/v1/workspaces/"+testWS+"/connections" && r.Method == "GET":
+		say(200, map[string]any{"connections": []any{map[string]any{"id": "con_ns", "provider": "namespace", "label": "Namespace", "key_problem": "Namespace didn't accept this token."}}})
+	case p == "/v1/workspaces/"+testWS+"/connections/con_ns/check" && r.Method == "POST":
+		say(200, map[string]any{"connection": map[string]any{"id": "con_ns", "provider": "namespace", "label": "Namespace", "key_problem": "Namespace didn't accept this token."}})
 	case p == base && r.Method == "GET":
 		say(200, map[string]any{"sandboxes": []any{map[string]any{"id": testSbx, "status": "running", "provider": "fake", "vcpu": 2, "memory_gib": 4}}})
 	case p == base+"/"+testSbx+"/commands" && r.Method == "POST":
@@ -197,6 +201,17 @@ func TestTheCommand(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); err == nil {
 		t.Fatal("a failed download left a file")
+	}
+
+	// providers says a refused key, check asks again, and adding or replacing a key sends the person to the dashboard.
+	if code, out, _ = annex(t, srv, dir, "", "providers"); code != 0 || !strings.Contains(out, "refused") || !strings.Contains(out, "annex providers key") {
+		t.Fatalf("providers: %d %q", code, out)
+	}
+	if code, out, _ = annex(t, srv, dir, "", "providers", "check", "con_ns"); code != 1 || !strings.Contains(out, "didn't accept") {
+		t.Fatalf("providers check: %d %q", code, out)
+	}
+	if code, out, _ = annex(t, srv, dir, "", "providers", "key", "con_ns"); code != 0 || !strings.Contains(out, "/dashboard/w/"+testWS+"/connections?key=con_ns") {
+		t.Fatalf("providers key: %d %q", code, out)
 	}
 
 	// logout forgets the key here.

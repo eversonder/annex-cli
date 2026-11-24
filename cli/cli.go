@@ -29,7 +29,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.5.1"
+const Version = "0.6.0"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -59,7 +59,10 @@ const usage = `annex: Annex from your terminal
   annex template from <id>    write an annex.yml from what was run in a sandbox:  annex template from > annex.yml
   annex template rm <name>
 
-  annex providers             the accounts this workspace has connected
+  annex providers             the accounts this workspace has connected, and whether a key was refused
+  annex providers add [name]  connect a provider: opens the dashboard's page for it
+  annex providers key <id>    replace an account's key: opens the dashboard's page for it
+  annex providers check <id>  ask the provider whether the account's key still works
 
   annex connect claude        give Claude Code Annex's tools, with this computer's key
   annex connect cursor        the same for Cursor (--project: a file for this project that holds no key)
@@ -609,10 +612,59 @@ func (a *App) act(verb string) func(context.Context, []string) error {
 	}
 }
 
-func (a *App) providers(ctx context.Context, _ []string) error {
+// providers lists the connected accounts. Adding one and replacing a key
+// open the dashboard: the API takes those from a signed-in person only, never
+// an API key, so an agent holding this computer's key can't widen what it
+// reaches (Lanre asked for both from the terminal, 2026-11-24).
+func (a *App) providers(ctx context.Context, args []string) error {
 	base, err := a.ws()
 	if err != nil {
 		return err
+	}
+	page := strings.TrimRight(a.cfg.URL, "/") + "/dashboard/w/" + url.PathEscape(a.cfg.Workspace) + "/connections"
+	if len(args) > 0 {
+		switch args[0] {
+		case "add", "key":
+			if args[0] == "key" && len(args) < 2 {
+				return errors.New("which account? annex providers key <id> (annex providers lists them)")
+			}
+			q := ""
+			if len(args) > 1 {
+				q = map[string]string{"add": "?add=", "key": "?key="}[args[0]] + url.QueryEscape(args[1])
+			}
+			fmt.Fprintf(a.Out, "Annex takes keys from a signed-in person, not from this computer's key. Opening:\n  %s%s\n", page, q)
+			if a.Open != nil {
+				a.Open(page + q)
+			}
+			return nil
+		case "check":
+			if len(args) < 2 {
+				return errors.New("which account? annex providers check <id> (annex providers lists them)")
+			}
+			var raw json.RawMessage
+			if err := a.call(ctx, "POST", base+"/connections/"+url.PathEscape(args[1])+"/check", struct{}{}, &raw); err != nil {
+				return err
+			}
+			if a.show(raw) {
+				return nil
+			}
+			var out struct {
+				Connection struct {
+					Provider, Label string
+					KeyProblem      string `json:"key_problem"`
+				}
+			}
+			json.Unmarshal(raw, &out)
+			c := out.Connection
+			if c.KeyProblem != "" {
+				fmt.Fprintf(a.Out, "%s (%s): the key was refused. %s\nReplace it: annex providers key %s\n", c.Label, c.Provider, c.KeyProblem, args[1])
+				return exit(1)
+			}
+			fmt.Fprintf(a.Out, "%s (%s): the key works.\n", c.Label, c.Provider)
+			return nil
+		default:
+			return fmt.Errorf("no providers command %q: add, key or check", args[0])
+		}
 	}
 	var raw json.RawMessage
 	if err := a.call(ctx, "GET", base+"/connections?perPage=100", nil, &raw); err != nil {
@@ -622,17 +674,28 @@ func (a *App) providers(ctx context.Context, _ []string) error {
 		return nil
 	}
 	var out struct {
-		Connections []struct{ ID, Provider, Label string }
+		Connections []struct {
+			ID, Provider, Label string
+			KeyProblem          string `json:"key_problem"`
+		}
 	}
 	json.Unmarshal(raw, &out)
 	if len(out.Connections) == 0 {
-		fmt.Fprintf(a.Out, "No provider accounts connected yet. Connect one at %s/dashboard (Connections).\n", a.cfg.URL)
+		fmt.Fprintf(a.Out, "No provider accounts connected yet. Connect one with annex providers add, or at %s.\n", page)
 		return nil
 	}
 	w := tabwriter.NewWriter(a.Out, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "PROVIDER\tNAME\tID")
+	fmt.Fprintln(w, "PROVIDER\tNAME\tID\tKEY")
+	refused := false
 	for _, c := range out.Connections {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", c.Provider, c.Label, c.ID)
+		key := "" // not checked lately, or it worked: nothing to say
+		if c.KeyProblem != "" {
+			key, refused = "refused", true
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", c.Provider, c.Label, c.ID, key)
+	}
+	if refused {
+		defer fmt.Fprintln(a.Out, "A refused key needs replacing: annex providers key <id>")
 	}
 	return w.Flush()
 }
