@@ -30,7 +30,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.8.0"
+const Version = "0.9.0"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -49,7 +49,7 @@ const usage = `annex: Annex from your terminal
   annex stop|pause|resume <id>
 
   annex run <id> -- <command> run a command, streaming its output; exits with its exit code
-  annex shell <id>            a terminal in the sandbox: history, Tab completion, cd and exports carry over
+  annex shell <id>            a terminal in the sandbox, key by key (--lines: a line at a time, as before 0.9)
   annex files <id> [path]     list a folder
   annex cp <from> <to>        copy a file in or out; the sandbox side is <id>:/path
   annex logs <id>             what the sandbox has logged

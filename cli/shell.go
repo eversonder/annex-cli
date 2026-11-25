@@ -10,23 +10,34 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
-// shell is a terminal in the sandbox. Each line runs as a command there, and
-// what a real shell keeps between lines is kept here too: the folder (cd), and
-// exported variables, which the sandbox saves after each line and loads before
-// the next. In a real terminal the line is edited as a shell's is: arrows,
-// history (kept between sessions), Tab to complete file names, Ctrl+C to drop
-// a line or stop a running command, Ctrl+D or exit to leave.
+// shell is a terminal in the sandbox. From a real terminal it is a real one
+// there too (terminal.go, 0.9.0): the sandbox's own shell, key by key, over
+// one connection. Where Annex can't give that (an older Annex, a sandbox that
+// can't call it back), with --lines, or with piped input, it runs a line at
+// a time instead:
 //
-// It is not a full terminal: Annex has no way to send keys to a running
-// program, so a program that asks a question or draws the whole screen (an
-// editor, top) can't be used through it.
+// each line runs as a command there, and what a real shell keeps between
+// lines is kept here too: the folder (cd), and exported variables, which the
+// sandbox saves after each line and loads before the next. In a real
+// terminal the line is edited as a shell's is: arrows, history (kept between
+// sessions), Tab to complete file names, Ctrl+C to drop a line or stop a
+// running command, Ctrl+D or exit to leave. A line at a time, a program that
+// asks a question or draws the whole screen (an editor, top) can't be used.
 func (a *App) shell(ctx context.Context, args []string) error {
+	byLine := slices.Contains(args, "--lines")
+	args = slices.DeleteFunc(args, func(s string) bool { return s == "--lines" })
 	id, _, err := a.pick(ctx, args)
 	if err != nil {
 		return err
+	}
+	if f, ok := a.In.(*os.File); ok && !byLine && isTerminal(f.Fd()) {
+		if err := a.terminal(ctx, id, f); !errors.Is(err, errNoTerminal) {
+			return err
+		}
 	}
 	// No pwd first (it was a whole round trip before the first prompt): the
 	// first line starts in the sandbox's own folder and every line says where it ended.

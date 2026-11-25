@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -435,5 +438,116 @@ func TestCwdTapStderrAfterMarker(t *testing.T) {
 	tap.flush()
 	if tap.cwd != "/root" || out.String() != "\nWARNING: apt\n\nE: Unable to locate package go\n" {
 		t.Fatalf("cwd %q, passed on %q", tap.cwd, out.String())
+	}
+}
+
+// The WebSocket client against a server that speaks the protocol by hand:
+// the handshake carries the key, messages of every length class come back
+// whole, a message sent in pieces is joined, a ping is answered, and an
+// answer that isn't 101 is the API's error.
+func TestWebSocketClient(t *testing.T) {
+	frame := func(op byte, fin bool, b []byte) []byte { // a server's frame: unmasked
+		h := []byte{op}
+		if fin {
+			h[0] |= 0x80
+		}
+		switch n := len(b); {
+		case n < 126:
+			h = append(h, byte(n))
+		case n < 1<<16:
+			h = append(h, 126, byte(n>>8), byte(n))
+		default:
+			h = append(h, 127, 0, 0, 0, 0, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
+		}
+		return append(h, b...)
+	}
+	readFrame := func(r *bufio.Reader) (byte, []byte) { // a client's frame: masked
+		var h [2]byte
+		io.ReadFull(r, h[:])
+		n := int(h[1] & 0x7f)
+		switch n {
+		case 126:
+			var b [2]byte
+			io.ReadFull(r, b[:])
+			n = int(b[0])<<8 | int(b[1])
+		case 127:
+			var b [8]byte
+			io.ReadFull(r, b[:])
+			n = int(b[4])<<24 | int(b[5])<<16 | int(b[6])<<8 | int(b[7])
+		}
+		var mask [4]byte
+		io.ReadFull(r, mask[:])
+		b := make([]byte, n)
+		io.ReadFull(r, b)
+		for i := range b {
+			b[i] ^= mask[i%4]
+		}
+		return h[0] & 0x0f, b
+	}
+	big := bytes.Repeat([]byte("x"), 70_000)
+	ponged := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/ws" || r.Header.Get("Authorization") != "Bearer anx_live_test" {
+			w.WriteHeader(404)
+			w.Write([]byte(`{"code":"not_found","message":"no such sandbox"}`))
+			return
+		}
+		sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+		c, rw, _ := w.(http.Hijacker).Hijack()
+		defer c.Close()
+		fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(sum[:]))
+		rw.Flush()
+		for { // echo each message back; "ping" asks for a ping first, "split" for the answer in two frames
+			op, b := readFrame(rw.Reader)
+			switch {
+			case op == wsPong:
+				ponged <- b
+				continue
+			case op == wsClose || op == 0:
+				rw.Write(frame(wsClose, true, nil))
+				rw.Flush()
+				return
+			case string(b) == "ping":
+				rw.Write(frame(wsPing, true, []byte("are you there")))
+			case string(b) == "split":
+				rw.Write(frame(op, false, []byte("sp")))
+				rw.Write(frame(0, true, []byte("lit")))
+				rw.Flush()
+				continue
+			}
+			rw.Write(frame(op, true, b))
+			rw.Flush()
+		}
+	}))
+	defer srv.Close()
+	a := &App{cfg: config{URL: srv.URL, Key: "anx_live_test"}}
+	ctx := context.Background()
+
+	var e *apiError
+	if _, err := a.dialWS(ctx, "/elsewhere"); !errors.As(err, &e) || e.Status != 404 || e.Message != "no such sandbox" {
+		t.Fatalf("an answer that isn't 101: %v", err)
+	}
+	c, err := a.dialWS(ctx, "/ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct {
+		op   byte
+		body []byte
+	}{{wsBinary, []byte("ls\r")}, {wsText, []byte(`{"resize":{"cols":80,"rows":24}}`)}, {wsBinary, bytes.Repeat([]byte("y"), 300)}, {wsBinary, big}, {wsBinary, []byte("split")}, {wsText, []byte("ping")}} {
+		if err := c.write(m.op, m.body); err != nil {
+			t.Fatal(err)
+		}
+		op, got, err := c.read()
+		if err != nil || op != m.op || !bytes.Equal(got, m.body) {
+			t.Fatalf("sent %d bytes of kind %d, read %d of kind %d (%v)", len(m.body), m.op, len(got), op, err)
+		}
+	}
+	if string(<-ponged) != "are you there" {
+		t.Fatal("the ping wasn't answered with its own words")
+	}
+	c.write(wsClose, nil)
+	if _, _, err := c.read(); err != io.EOF {
+		t.Fatalf("after the close: %v", err)
 	}
 }

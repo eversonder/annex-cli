@@ -84,7 +84,6 @@ This repository mirrors the command's source from Annex's own, where the builds 
 ## Not yet
 
 - No native Windows build (use WSL), no Homebrew formula, no self-update.
-- `annex shell` runs each line as a command, so programs that draw the whole screen or prompt for input don't work in it.
 
 ## Licence
 
