@@ -401,3 +401,15 @@ func TestConnectAnAgent(t *testing.T) {
 		t.Fatalf("the project's file: %s", b)
 	}
 }
+
+// A quick command's stdout and stderr come back as one text, stderr last, so
+// the folder marker is not the end of it: the folder is the marker's line only.
+func TestCwdTapStderrAfterMarker(t *testing.T) {
+	var out bytes.Buffer
+	tap := &cwdTap{w: &out, mark: "__annex_cwd__"}
+	io.WriteString(tap, "\n__annex_cwd__/root\n\nWARNING: apt\n\nE: Unable to locate package go\n")
+	tap.flush()
+	if tap.cwd != "/root" || out.String() != "\nWARNING: apt\n\nE: Unable to locate package go\n" {
+		t.Fatalf("cwd %q, passed on %q", tap.cwd, out.String())
+	}
+}

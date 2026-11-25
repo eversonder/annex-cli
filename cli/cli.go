@@ -30,7 +30,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.7.1"
+const Version = "0.7.2"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -902,13 +902,24 @@ func (t *cwdTap) Write(p []byte) (int, error) {
 	t.held = append(t.held, p...)
 	if i := bytes.LastIndexByte(t.held, '\n'); i >= 0 { // whole lines but the last may go
 		head := t.held[:i+1]
-		if j := bytes.LastIndex(head, []byte("\n"+t.mark)); j >= 0 {
-			t.cwd = strings.TrimSpace(string(head[j+1+len(t.mark):]))
-			head = head[:j]
-		} else if bytes.HasPrefix(head, []byte(t.mark)) {
-			t.cwd, head = strings.TrimSpace(string(head[len(t.mark):])), nil
+		cut := bytes.LastIndex(head, []byte("\n"+t.mark)) // where the output before the marker ends
+		at := cut + 1
+		if cut < 0 && bytes.HasPrefix(head, []byte(t.mark)) {
+			cut, at = 0, 0
+		}
+		var after []byte
+		if cut >= 0 {
+			// The folder is the marker's own line and no more: when stdout and
+			// stderr come back in one answer, stderr follows the marker.
+			line := head[at+len(t.mark):]
+			end := bytes.IndexByte(line, '\n') // there is one: head ends with it
+			t.cwd, after, head = strings.TrimSpace(string(line[:end])), line[end+1:], head[:cut]
 		}
 		t.put(head)
+		if len(after) > 0 && t.last != 0 && t.last != '\n' {
+			t.put([]byte("\n"))
+		}
+		t.put(after)
 		t.held = append(t.held[:0], t.held[i+1:]...)
 	}
 	return len(p), nil
