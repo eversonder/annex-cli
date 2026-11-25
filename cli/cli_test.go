@@ -65,7 +65,7 @@ func (s *annexStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case p == "/v1/key":
 		say(200, map[string]any{"key": map[string]any{"id": "key_1", "workspace": map[string]any{"id": testWS, "name": "Acme"}}})
 	case p == "/v1/workspaces/"+testWS+"/connections" && r.Method == "GET":
-		say(200, map[string]any{"connections": []any{map[string]any{"id": "con_ns", "provider": "namespace", "label": "Namespace", "key_problem": "Namespace didn't accept this token."}}})
+		say(200, map[string]any{"connections": []any{map[string]any{"id": "con_ns", "provider": "namespace", "method": "api_key", "label": "Namespace", "key_problem": "Namespace didn't accept this token."}}})
 	case p == "/v1/workspaces/"+testWS+"/connections/con_ns/check" && r.Method == "POST":
 		say(200, map[string]any{"connection": map[string]any{"id": "con_ns", "provider": "namespace", "label": "Namespace", "key_problem": "Namespace didn't accept this token."}})
 	case p == base && r.Method == "GET":
@@ -135,6 +135,21 @@ func (s *annexStandIn) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		say(404, map[string]any{"code": "not_found", "message": "sandbox not found"})
 	}
+}
+
+// annexEnv is annex with more environment variables, and no stdin.
+func annexEnv(t *testing.T, srv *httptest.Server, dir string, env map[string]string, args ...string) (code int, out, errs string) {
+	t.Helper()
+	var o, e bytes.Buffer
+	app := &App{In: strings.NewReader(""), Out: &o, Err: &e, Dir: dir, HTTP: srv.Client(), NoFile: true,
+		Env: func(k string) string {
+			if k == "ANNEX_URL" {
+				return srv.URL
+			}
+			return env[k]
+		}}
+	code = app.Run(context.Background(), args)
+	return code, o.String(), e.String()
 }
 
 // annex runs the command against the stand-in, with a config folder of its own.
@@ -234,6 +249,15 @@ func TestTheCommand(t *testing.T) {
 	}
 	if code, out, _ = annex(t, srv, dir, "", "providers", "key", "con_ns"); code != 0 || !strings.Contains(out, "/dashboard/w/"+testWS+"/connections?key=con_ns") {
 		t.Fatalf("providers key: %d %q", code, out)
+	}
+
+	// doctor says each part in turn and how long it took: here the account's refused key is the one problem,
+	// and the sandbox runs a command. With ANNEX_TIMING each request is timed on stderr.
+	code, out, errs = annexEnv(t, srv, dir, map[string]string{"ANNEX_TIMING": "1"}, "doctor", testSbx)
+	if code != 1 || !strings.Contains(out, "problem  account") || !strings.Contains(out, "didn't accept") ||
+		!strings.Contains(out, "ok       sandbox    "+testSbx+": ran a command") || !strings.Contains(out, "ok       key") ||
+		!strings.Contains(errs, "timing: GET /v1/key 200 in") {
+		t.Fatalf("doctor: %d\n%s\n%s", code, out, errs)
 	}
 
 	// logout forgets the key here.

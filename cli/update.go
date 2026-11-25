@@ -33,6 +33,11 @@ func (a *App) update(ctx context.Context, _ []string) error {
 	}
 	build := "annex-" + runtime.GOOS + "-" + runtime.GOARCH
 	base := strings.TrimRight(a.cfg.URL, "/") + "/cli/bin/" + build
+	// The same version is the newest, whatever built it (go install makes another file of it).
+	if v, err := a.fetch(ctx, strings.TrimRight(a.cfg.URL, "/")+"/cli/version", 64); err == nil && strings.TrimSpace(string(v)) == Version {
+		fmt.Fprintf(a.Out, "annex %s is the newest.\n", Version)
+		return nil
+	}
 
 	want, err := a.fetch(ctx, base+".sha256", 1<<10)
 	if err != nil {

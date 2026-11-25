@@ -28,11 +28,9 @@ func (a *App) shell(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	cwd, err := a.quiet(ctx, id, "pwd", "")
-	if err != nil {
-		return err
-	}
-	cwd = strings.TrimSpace(cwd)
+	// No pwd first (it was a whole round trip before the first prompt): the
+	// first line starts in the sandbox's own folder and every line says where it ended.
+	cwd := ""
 	env := "/tmp/.annex-shell-" + strings.ToLower(rand.Text()[:10]) + ".env" // this session's exported variables
 	defer a.quiet(context.WithoutCancel(ctx), id, "rm -f "+env, "")
 
@@ -53,9 +51,9 @@ func (a *App) shell(ctx context.Context, args []string) error {
 		var line string
 		var err error
 		if ed != nil {
-			line, err = ed.read(fmt.Sprintf("\x1b[32m%s\x1b[0m:\x1b[34m%s\x1b[0m$ ", id[:min(len(id), 12)], cwd))
+			line, err = ed.read(fmt.Sprintf("\x1b[32m%s\x1b[0m:\x1b[34m%s\x1b[0m$ ", id[:min(len(id), 12)], cmpOr(cwd, "~")))
 		} else {
-			fmt.Fprintf(a.Out, "%s:%s$ ", id[:min(len(id), 12)], cwd)
+			fmt.Fprintf(a.Out, "%s:%s$ ", id[:min(len(id), 12)], cmpOr(cwd, "~"))
 			line, err = lines.ReadString('\n')
 		}
 		line = strings.TrimSpace(line)

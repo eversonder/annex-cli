@@ -30,7 +30,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.7.2"
+const Version = "0.8.0"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -68,9 +68,11 @@ const usage = `annex: Annex from your terminal
   annex connect claude        give Claude Code Annex's tools, with this computer's key
   annex connect cursor        the same for Cursor (--project: a file for this project that holds no key)
   annex update                replace this annex with the newest build
+  annex doctor [id]           check this annex, its key, your accounts and a sandbox, and how long each takes
   annex version
 
 <id> may be left out when exactly one sandbox is running. Add --json to print the API's own answer.
+ANNEX_TIMING=1 before any command prints how long each request to Annex took, and where.
 Docs: https://annex.eversonder.com/docs
 `
 
@@ -133,7 +135,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	run := map[string]func(context.Context, []string) error{
 		"login": a.login, "logout": a.logout, "whoami": a.whoami,
 		"ls": a.ls, "start": a.start, "info": a.info, "stop": a.act("stop"), "pause": a.act("pause"), "resume": a.act("resume"),
-		"run": a.run, "shell": a.shell, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers, "connect": a.connect, "update": a.update,
+		"run": a.run, "shell": a.shell, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers, "connect": a.connect, "update": a.update, "doctor": a.doctor,
 		"template": a.templates, "templates": a.templates,
 		"version": func(context.Context, []string) error { fmt.Fprintln(a.Out, "annex", Version); return nil },
 	}[cmd]
@@ -220,7 +222,7 @@ func (a *App) request(ctx context.Context, method, p string, body io.Reader, cty
 		req.Header.Set("Content-Type", ctype)
 	}
 	req.Header.Set("User-Agent", "annex-cli/"+Version)
-	res, err := a.HTTP.Do(req)
+	res, err := a.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't reach %s: %w", a.cfg.URL, err)
 	}
@@ -235,6 +237,49 @@ func (a *App) request(ctx context.Context, method, p string, body io.Reader, cty
 		return nil, e
 	}
 	return res, nil
+}
+
+// do sends req. With ANNEX_TIMING set it asks Annex where the time went
+// (Server-Timing: each step Annex times, "provider" among them) and prints,
+// for each request, how long the whole round trip took and Annex's own part.
+// A stream's time is until its first byte, not its end.
+func (a *App) do(req *http.Request) (*http.Response, error) {
+	if a.Env("ANNEX_TIMING") == "" {
+		return a.HTTP.Do(req)
+	}
+	req.Header.Set("Annex-Timing", "1")
+	start := time.Now()
+	res, err := a.HTTP.Do(req)
+	took := time.Since(start).Round(time.Millisecond)
+	p := req.URL.Path
+	if req.URL.RawQuery != "" {
+		p += "?" + req.URL.RawQuery
+	}
+	if err != nil {
+		fmt.Fprintf(a.Err, "timing: %s %s failed after %s\n", req.Method, p, took)
+		return res, err
+	}
+	fmt.Fprintf(a.Err, "timing: %s %s %d in %s", req.Method, p, res.StatusCode, took)
+	if st := res.Header.Get("Server-Timing"); st != "" {
+		fmt.Fprintf(a.Err, " (Annex: %s)", serverTiming(st))
+	}
+	fmt.Fprintln(a.Err)
+	return res, nil
+}
+
+// serverTiming reads "app;dur=812.3, provider;dur=790.1" as "app 812ms, provider 790ms".
+func serverTiming(h string) string {
+	var parts []string
+	for _, m := range strings.Split(h, ",") {
+		name, rest, _ := strings.Cut(strings.TrimSpace(m), ";")
+		_, dur, ok := strings.Cut(rest, "dur=")
+		if ms, err := strconv.ParseFloat(strings.TrimSpace(dur), 64); ok && err == nil {
+			parts = append(parts, fmt.Sprintf("%s %.0fms", name, ms))
+		} else if name != "" {
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // call sends in as JSON (nil: no body) and decodes the answer into out (nil:
@@ -799,7 +844,7 @@ func (a *App) follow(ctx context.Context, p, last string) (code int, ended bool,
 	if last != "" {
 		req.Header.Set("Last-Event-ID", last)
 	}
-	res, err := a.HTTP.Do(req)
+	res, err := a.do(req)
 	if err != nil {
 		return 1, false, "", err
 	}
