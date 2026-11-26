@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -35,13 +36,33 @@ func (a *App) terminal(ctx context.Context, id string, tty *os.File) error {
 	var e *apiError
 	if errors.As(err, &e) && e.Status != 401 && e.Status != 403 && e.Status != 409 {
 		// 409 is the sandbox's own state (paused, stopped, setting up): the line shell would say the same.
-		fmt.Fprintf(a.Err, "annex: no terminal here (%s). Running a line at a time instead.\n", e.Error())
+		fmt.Fprintf(a.Err, "annex: no terminal here (%s). Running a line at a time instead.\n", strings.TrimSuffix(e.Error(), "."))
 		return errNoTerminal
 	}
 	if err != nil {
 		return err
 	}
 	defer c.close()
+	// Annex answers at once and starts the sandbox's end behind the open connection, saying how it
+	// is going. Until it says ready no key is read, so a terminal it can't give still falls back.
+	for ready := false; !ready; {
+		op, b, err := c.read()
+		var m struct {
+			Status, Error string
+			Ready         bool
+		}
+		if err == nil && op == wsText {
+			json.Unmarshal(b, &m)
+		}
+		switch {
+		case err != nil || m.Error != "":
+			fmt.Fprintf(a.Err, "annex: no terminal here (%s). Running a line at a time instead.\n", cmpOr(m.Error, "the connection ended"))
+			return errNoTerminal
+		case m.Status != "":
+			fmt.Fprintln(a.Out, m.Status)
+		}
+		ready = m.Ready
+	}
 	restore, err := makeRaw(tty.Fd())
 	if err != nil {
 		return err
