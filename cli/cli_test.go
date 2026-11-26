@@ -551,3 +551,14 @@ func TestWebSocketClient(t *testing.T) {
 		t.Fatalf("after the close: %v", err)
 	}
 }
+
+func TestShownDirAbbreviatesHome(t *testing.T) {
+	for _, c := range []struct{ cwd, home, want string }{
+		{"", "", "~"}, {"/root", "/root", "~"}, {"/root/app", "/root", "~/app"},
+		{"/rootless", "/root", "/rootless"}, {"/tmp", "/root", "/tmp"}, {"/srv", "/", "/srv"}, {"/root", "", "/root"},
+	} {
+		if got := shownDir(c.cwd, c.home); got != c.want {
+			t.Errorf("shownDir(%q, %q) = %q, want %q: the prompt must show home as ~ before and after the first line", c.cwd, c.home, got, c.want)
+		}
+	}
+}

@@ -41,7 +41,7 @@ func (a *App) shell(ctx context.Context, args []string) error {
 	}
 	// No pwd first (it was a whole round trip before the first prompt): the
 	// first line starts in the sandbox's own folder and every line says where it ended.
-	cwd := ""
+	cwd, home := "", ""
 	env := "/tmp/.annex-shell-" + strings.ToLower(rand.Text()[:10]) + ".env" // this session's exported variables
 	defer a.quiet(context.WithoutCancel(ctx), id, "rm -f "+env, "")
 
@@ -62,9 +62,9 @@ func (a *App) shell(ctx context.Context, args []string) error {
 		var line string
 		var err error
 		if ed != nil {
-			line, err = ed.read(fmt.Sprintf("\x1b[32m%s\x1b[0m:\x1b[34m%s\x1b[0m$ ", id[:min(len(id), 12)], cmpOr(cwd, "~")))
+			line, err = ed.read(fmt.Sprintf("\x1b[32m%s\x1b[0m:\x1b[34m%s\x1b[0m$ ", id[:min(len(id), 12)], shownDir(cwd, home)))
 		} else {
-			fmt.Fprintf(a.Out, "%s:%s$ ", id[:min(len(id), 12)], cmpOr(cwd, "~"))
+			fmt.Fprintf(a.Out, "%s:%s$ ", id[:min(len(id), 12)], shownDir(cwd, home))
 			line, err = lines.ReadString('\n')
 		}
 		line = strings.TrimSpace(line)
@@ -89,11 +89,11 @@ func (a *App) shell(ctx context.Context, args []string) error {
 		prev := a.Out
 		a.Out = tap
 		_, runErr := a.exec(ctx, id, "{ [ -f "+env+" ] && . "+env+"; } 2>/dev/null\n"+line+
-			"\n__annex_rc=$?; export -p > "+env+" 2>/dev/null; printf '\\n"+mark+"%s\\n' \"$PWD\"; exit $__annex_rc", cwd, 0, quickWait)
+			"\n__annex_rc=$?; export -p > "+env+" 2>/dev/null; printf '\\n"+mark+"%s\\t%s\\n' \"$PWD\" \"$HOME\"; exit $__annex_rc", cwd, 0, quickWait)
 		a.Out = prev
 		tap.flush()
 		if tap.cwd != "" {
-			cwd = tap.cwd
+			cwd, home, _ = strings.Cut(tap.cwd, "\t")
 		}
 		if runErr != nil {
 			fmt.Fprintln(a.Err, "annex:", runErr)
@@ -324,4 +324,17 @@ func commonPrefix(list []string) string {
 		}
 	}
 	return p
+}
+
+// shownDir is the folder for the prompt, the home folder as ~ the way a login
+// shell shows it, so the first prompt (before the sandbox has said where it
+// is, so ~) and the next ones agree.
+func shownDir(cwd, home string) string {
+	switch {
+	case cwd == "" || (home != "" && cwd == home):
+		return "~"
+	case home != "" && home != "/" && strings.HasPrefix(cwd, home+"/"):
+		return "~" + cwd[len(home):]
+	}
+	return cwd
 }
