@@ -30,7 +30,7 @@ import (
 )
 
 // Version is this build of the command.
-const Version = "0.9.1"
+const Version = "0.10.0"
 
 // DefaultURL is where Annex lives; ANNEX_URL or login --url say otherwise.
 const DefaultURL = "https://annex.eversonder.com"
@@ -50,6 +50,7 @@ const usage = `annex: Annex from your terminal
 
   annex run <id> -- <command> run a command, streaming its output; exits with its exit code
   annex shell <id>            a terminal in the sandbox, key by key (--lines: a line at a time, as before 0.9)
+  annex tunnel <id> <port>    reach a port in the sandbox from this computer at 127.0.0.1:<port> (--local <port>: another port here)
   annex files <id> [path]     list a folder
   annex cp <from> <to>        copy a file in or out; the sandbox side is <id>:/path
   annex logs <id>             what the sandbox has logged
@@ -135,7 +136,7 @@ func (a *App) Run(ctx context.Context, args []string) int {
 	run := map[string]func(context.Context, []string) error{
 		"login": a.login, "logout": a.logout, "whoami": a.whoami,
 		"ls": a.ls, "start": a.start, "info": a.info, "stop": a.act("stop"), "pause": a.act("pause"), "resume": a.act("resume"),
-		"run": a.run, "shell": a.shell, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers, "connect": a.connect, "update": a.update, "doctor": a.doctor,
+		"run": a.run, "shell": a.shell, "tunnel": a.tunnel, "files": a.files, "cp": a.cp, "logs": a.logs, "providers": a.providers, "connect": a.connect, "update": a.update, "doctor": a.doctor,
 		"template": a.templates, "templates": a.templates,
 		"version": func(context.Context, []string) error { fmt.Fprintln(a.Out, "annex", Version); return nil },
 	}[cmd]
