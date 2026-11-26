@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/base64"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -12,8 +16,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/coder/websocket"
 )
 
 // annex tunnel: a local port whose connections each open a tunnel and pass
@@ -27,27 +29,25 @@ func TestTunnel(t *testing.T) {
 			http.Error(w, "no", 404)
 			return
 		}
-		c, err := websocket.Accept(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer c.CloseNow()
+		conn, rw := acceptWS(w, r)
+		defer conn.Close()
 		mu.Lock()
 		n++
 		first := n == 1
 		mu.Unlock()
-		ctx := r.Context()
+		send := func(op byte, b []byte) { rw.Write(serverFrame(op, b)); rw.Flush() }
 		if first {
-			c.Write(ctx, websocket.MessageText, []byte(`{"error":"Nothing in this sandbox answered on port 5432."}`))
+			send(wsText, []byte(`{"error":"Nothing in this sandbox answered on port 5432."}`))
 			return
 		}
-		c.Write(ctx, websocket.MessageText, []byte(`{"status":"Putting Annex's terminal helper in this sandbox."}`))
-		c.Write(ctx, websocket.MessageText, []byte(`{"ready":true}`))
+		send(wsText, []byte(`{"status":"Putting Annex's terminal helper in this sandbox."}`))
+		send(wsText, []byte(`{"ready":true}`))
 		for { // echo
-			kind, b, err := c.Read(ctx)
-			if err != nil || c.Write(ctx, kind, b) != nil {
+			op, b, err := clientFrame(rw.Reader)
+			if err != nil || op == wsClose {
 				return
 			}
+			send(op, b)
 		}
 	}))
 	defer srv.Close()
@@ -111,4 +111,41 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.b.String()
+}
+
+// A WebSocket server by hand, as in TestWebSocketClient: the published CLI
+// is standard library only, its tests included.
+func acceptWS(w http.ResponseWriter, r *http.Request) (net.Conn, *bufio.ReadWriter) {
+	sum := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+	c, rw, _ := w.(http.Hijacker).Hijack()
+	fmt.Fprintf(rw, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(sum[:]))
+	rw.Flush()
+	return c, rw
+}
+
+func serverFrame(op byte, b []byte) []byte { // unmasked, short messages only
+	return append([]byte{0x80 | op, byte(len(b))}, b...)
+}
+
+func clientFrame(r *bufio.Reader) (byte, []byte, error) { // masked, under 64 KiB
+	var h [2]byte
+	if _, err := io.ReadFull(r, h[:]); err != nil {
+		return 0, nil, err
+	}
+	n := int(h[1] & 0x7f)
+	if n == 126 {
+		var b [2]byte
+		io.ReadFull(r, b[:])
+		n = int(b[0])<<8 | int(b[1])
+	}
+	var mask [4]byte
+	io.ReadFull(r, mask[:])
+	b := make([]byte, n)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return 0, nil, err
+	}
+	for i := range b {
+		b[i] ^= mask[i%4]
+	}
+	return h[0] & 0x0f, b, nil
 }
